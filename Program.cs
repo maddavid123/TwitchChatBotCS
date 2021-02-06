@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Net.Sockets;
+using System.Threading.Tasks;
 
 namespace MaDDTwitchBot
 {
@@ -90,7 +91,7 @@ namespace MaDDTwitchBot
             string message = messageSplit[2];
             
             //Then send it off for extra processing!
-            handleCommand(username, message);
+            HandleCommand(username, message);
         }
 
         /// <summary>
@@ -98,7 +99,7 @@ namespace MaDDTwitchBot
         /// </summary>
         /// <param name="username">Currently unused, but for future operations we can match on a modlist or VIP list.</param>
         /// <param name="message">The message to process.</param>
-        private static void handleCommand(string username, string message)
+        private static void HandleCommand(string username, string message)
         {
             // Not sure whether this is particularly desired, but we can keep this in
             Console.WriteLine(username + ":" + message);
@@ -120,6 +121,38 @@ namespace MaDDTwitchBot
                         SendMessage("Level " + levelNumber + " - " + VerletHighScoresParser.levelNames[levelNumber] + ": " + VerletHighScoresParser.levelTimes[levelNumber] + "s!");
                     }
                 }
+            }
+        }
+
+        private static void OnVerletLevelChange(object sender, EventArgs e)
+        {
+            // Only run if we've already initiated the Verlet Swing XML Parser.
+            if(VerletHighScoresParser.levelNames.Count > 0)
+            {
+                int lastLevel = VerletResetCounterModule.LastLevel;
+                int attempts = VerletResetCounterModule.RetryCount;
+                string lastLevelName = VerletHighScoresParser.levelNames[lastLevel];
+                if (attempts > 0)
+                {
+                    SendMessage("Level Changed. Attempts on level " + VerletResetCounterModule.LastLevel + " - " + lastLevelName + ": " + attempts);
+                }
+            }
+        }
+        private static void OnVerletLevelPersonalBest(object sender, EventArgs e)
+        {
+            if(VerletHighScoresParser.levelNames.Count > 0)
+            {
+                double oldTime = VerletHighScoresParser.OldTime;
+                double newTime = VerletHighScoresParser.NewTime;
+                int levelNum = VerletHighScoresParser.PbLevel;
+                double improvement = oldTime - newTime;
+                /*
+                VerletHighScoresParser.OldTime = 0;
+                VerletHighScoresParser.NewTime = 0;
+                VerletHighScoresParser.PbLevel = 0;
+                */
+                SendMessage("Personal Best on Level " + levelNum + " - " + VerletHighScoresParser.levelNames[levelNum] +". Attempt number: " + VerletResetCounterModule.RetryCount);
+                SendMessage("From " + oldTime.ToString("#.000") + "s to " + newTime.ToString("#.000") + "s. An improvement of " + improvement.ToString("#0.000") + "s!");
             }
         }
 
@@ -178,10 +211,32 @@ namespace MaDDTwitchBot
             // Now that we've connected, we may as well let the twitch chat know we've arrived.
             // Then keep reading lines in from Twitch and process them.
             SendMessage("Twitch Bot: Online");
+
+            // Hook into Verlet Swing if it's running.
+            VerletResetCounterModule.Init();
+            Task runVerletMemoryMonitorTask = Task.Factory.StartNew(() => VerletResetCounterModule.CoreLoop());
+
+            VerletResetCounterModule.OnLevelChange += OnVerletLevelChange;
+            VerletHighScoresParser.OnLevelPersonalBest += OnVerletLevelPersonalBest;
+
+            // Currently not accounting for network dropout.
             bool connectionOpen = true;
+            DateTime lastAttempt = DateTime.Now;
             while (connectionOpen)
             {
-                if (reader.BaseStream.CanRead)
+                // Every x seconds if Verlet is closed, try and connect.
+                if(!VerletResetCounterModule.isVerletOpen)
+                {
+                    DateTime now = DateTime.Now;
+                    TimeSpan time = now.Subtract(lastAttempt);
+                    if (time.TotalSeconds > 30)
+                    {
+                        VerletResetCounterModule.Init();
+                        lastAttempt = now;
+                        Console.WriteLine("Trying to connect to Verlet!");
+                    }
+                }
+                if (((NetworkStream)reader.BaseStream).DataAvailable)
                 {
                     while ((inBuffer = reader.ReadLine()) != null)
                     {

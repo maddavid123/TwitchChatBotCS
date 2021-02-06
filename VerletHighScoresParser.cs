@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml.Linq;
 
 namespace MaDDTwitchBot
@@ -14,7 +16,7 @@ namespace MaDDTwitchBot
         /// <summary>
         /// A List containing the times for each level in the game.
         /// </summary>
-        public static readonly List<double> levelTimes = new List<double>();
+        public static List<double> levelTimes = new List<double>();
 
         /// <summary>
         /// A list containing the name of each level in the game.
@@ -31,6 +33,31 @@ namespace MaDDTwitchBot
         /// Typically: C:\Users\CurrentUser\%appdata%\LocalLow\Flamebait Games\Verlet Swing
         /// </summary>
         public static string fileLocation = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + @"Low\Flamebait Games\Verlet Swing";
+
+        private static double oldTime = 0;
+        private static double newTime = 0;
+        private static int pbLevel = 0;
+
+        /// <summary>
+        /// Gets or Sets the old level time.
+        /// </summary>
+        public static double OldTime { get => oldTime; set => oldTime = value; }
+
+        /// <summary>
+        /// Gets or Sets the new level time.
+        /// </summary>
+        public static double NewTime { get => newTime; set => newTime = value; }
+
+        /// <summary>
+        /// Gets or Sets the level that just PB'd.
+        /// </summary>
+        public static int PbLevel { get => pbLevel; set => pbLevel = value; }
+
+        /// <summary>
+        /// Event to hook onto to notify on Personal Best.
+        /// </summary>
+        public static event EventHandler OnLevelPersonalBest;
+
 
         /// <summary>
         /// Initiate the File Parser, and set up this utility class.
@@ -204,15 +231,35 @@ namespace MaDDTwitchBot
         /// </summary>
         private static void ReadScores()
         {
+            // BUGBUG :  IOException on High Score update.
+            // HACKHACK: Try to sleep for half a second prior to updating our level time.
+            Thread.Sleep(500);
+            List<double> newLevelTimes = new List<double>();
             XElement scoreList = XElement.Load(fileLocation + @"\highscore.xml");
             // TODO: LINQ here can be simplified/optimised.
             var highScoreList = from highscoreList in scoreList.Elements() select highscoreList;
             var highscores = from highscore in highScoreList.Elements() select highscore;
+            int i = 0;
             foreach (var s in highscores)
             {
-                // Potential BUGBUG - Setup a tryParse here instead of a standard parse. Potential for errors.
-                levelTimes.Add(double.Parse(s.Attribute("time").Value) / 1000);
+                if (double.TryParse(s.Attribute("time").Value, out double time))
+                {
+                    newLevelTimes.Add(time / 1000);
+
+                    // If there's an old time  stored, and this update has beaten the old time
+                    if(levelTimes.Count > 0 && (time/1000) < levelTimes[i])
+                    {
+                        // This is a new local PB.
+                        PbLevel = i;
+                        OldTime = levelTimes[i];
+                        NewTime = time/1000;
+                        OnLevelPersonalBest?.Invoke(null, new EventArgs());
+                        
+                    }
+                }
+                i++;
             }
+            levelTimes = newLevelTimes;
         }
 
         /// <summary>
